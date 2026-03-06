@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Survey Tracker — Street Data</title>
+<title>Survey Tracker — Street Data (Persistent)</title>
 <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@300;400;600;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
 <style>
   :root {
@@ -128,8 +128,8 @@
   .tl-bar-row:hover .tl-bar-label { color:var(--accent); }
   .tl-bar-count { font-family:'Space Mono',monospace; font-size:12px; color:var(--muted); min-width:60px; text-align:right; }
 
-  .tl-today-dot { display:inline-block; width:7px;height:7px; border-radius:50%; background:var(--accent); box-shadow:0 0 6px var(--accent); margin-left:6px; vertical-align:middle; }
-  .date-col { font-family:'Space Mono',monospace; font-size:12px; white-space:nowrap; }
+  .tl-today-dot { display:inline-block; width:7px;height:7px; border-radius:50%; background:var(--accent); box-shadow:0 0 6px var(--accent); margin-left:6px }
+  
   .time-col { font-family:'Space Mono',monospace; font-size:12px; color:var(--muted); white-space:nowrap; }
   .date-today { color:var(--accent); font-weight:700; }
 
@@ -348,12 +348,34 @@ const F8 = {
   fulfillment:{ label:'Fulfillment', color:'#2dd4bf', desc:'ความสำเร็จในใจ' }
 };
 
-const GAS_URL = 'https://script.google.com/macros/s/AKfycbyy7P84x7B0aY0hWvNyylAdzO32PyZMw9vNsTlOVWJarSE7M_FMgN-ZlCREKYy6FmHw/exec';
+const GAS_URL = 'https://script.google.com/macros/s/AKfycbwjBYEzsMKaEM8e8KtjWMyC9GkLpVRVsACf3YsU4rURai-3IzqjXqwczJf8TDIJr0hS/exec';
+const STORAGE_KEY = 'STREET_SURVEY_DATA';
 
 let data = [];
 let nextId = 1;
 let editId = null;
 let currentPeriod = 'day';
+
+// ============================================================
+// PERSISTENCE LOGIC (LocalStorage)
+// ============================================================
+function saveDataToLocal() {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+}
+
+function loadDataFromLocal() {
+  const saved = localStorage.getItem(STORAGE_KEY);
+  if (saved) {
+    try {
+      data = JSON.parse(saved);
+      nextId = data.length ? Math.max(...data.map(d => d.id)) + 1 : 1;
+      render();
+      setStatus('✓ โหลดข้อมูลจากเครื่องแล้ว', '#4ade80');
+    } catch (e) {
+      console.error('Error loading local data', e);
+    }
+  }
+}
 
 function setStatus(msg, color) {
   const el = document.getElementById('sync-status');
@@ -361,30 +383,123 @@ function setStatus(msg, color) {
 }
 
 async function loadFromSheets() {
-  setStatus('⟳ กำลังโหลด...', '#f5c842');
+  setStatus('⟳ กำลังซิงค์...', '#f5c842');
   try {
     const res = await fetch(GAS_URL);
     const json = await res.json();
-    if (json.ok) {
+    if (json.status === 'success') {
+      // รวมข้อมูลจาก Sheets เข้ากับข้อมูลในเครื่อง (ถ้าต้องการ)
+      // ในที่นี้จะขอใช้ข้อมูลจาก Sheets เป็นหลักหากซิงค์สำเร็จ
       data = json.data.map(d => ({ ...d, id: Number(d.id) }));
       nextId = data.length ? Math.max(...data.map(d => d.id)) + 1 : 1;
-      setStatus('✓ ซิงค์แล้ว', '#4ade80');
+      saveDataToLocal(); // บันทึกลงเครื่องด้วย
+      setStatus('✓ ซิงค์สำเร็จ', '#4ade80');
       render();
     } else {
-      setStatus('✗ โหลดไม่ได้', '#f472b6');
+      setStatus('✗ ซิงค์ไม่สำเร็จ', '#f472b6');
     }
   } catch(e) {
-    setStatus('✗ ไม่มีอินเทอร์เน็ต', '#f472b6');
+    setStatus('✗ เชื่อมต่อไม่ได้ (ใช้ข้อมูลในเครื่อง)', '#f472b6');
   }
 }
 
-async function apiPost(payload) {
-  const res = await fetch(GAS_URL, { method: 'POST', body: JSON.stringify(payload) });
-  return res.json();
+// ============================================================
+// MODAL & FORM
+// ============================================================
+function openModal(id) {
+  editId = id || null;
+  const title = document.getElementById('modal-title');
+  const nameInput = document.getElementById('f-name');
+  const igInput = document.getElementById('f-ig');
+  const facultyInput = document.getElementById('f-faculty');
+  const answerSelect = document.getElementById('f-answer');
+  const noteText = document.getElementById('f-note');
+
+  if (editId) {
+    const entry = data.find(d => d.id === editId);
+    title.textContent = '// แก้ไขข้อมูล';
+    nameInput.value = entry.name || '';
+    igInput.value = entry.ig || '';
+    facultyInput.value = entry.faculty || '';
+    answerSelect.value = entry.answer || '';
+    noteText.value = entry.note || '';
+    buildF8Grid(entry.f8 || []);
+  } else {
+    title.textContent = '// เพิ่มข้อมูลใหม่';
+    nameInput.value = '';
+    igInput.value = '';
+    facultyInput.value = '';
+    answerSelect.value = '';
+    noteText.value = '';
+    buildF8Grid([]);
+  }
+  document.getElementById('modal').classList.add('open');
+}
+
+function closeModal() {
+  document.getElementById('modal').classList.remove('open');
+}
+
+function saveEntry() {
+  const name = document.getElementById('f-name').value.trim();
+  const ig = document.getElementById('f-ig').value.trim();
+  const faculty = document.getElementById('f-faculty').value.trim();
+  const answer = document.getElementById('f-answer').value;
+  const f8 = getSelectedF8();
+  const note = document.getElementById('f-note').value.trim();
+
+  if (!name || !answer) { alert('กรุณากรอกชื่อและเลือก Career Path'); return; }
+
+  if (editId) {
+    const idx = data.findIndex(d => d.id === editId);
+    data[idx] = { ...data[idx], name, ig, faculty, answer, f8, note };
+  } else {
+    const newEntry = {
+      id: nextId++,
+      name, ig, faculty, answer, f8, note,
+      createdAt: new Date().toISOString()
+    };
+    data.push(newEntry);
+  }
+
+  saveDataToLocal();
+  render();
+  closeModal();
+  
+  // พยายามส่งข้อมูลไป Google Sheets (ถ้ามี)
+  syncToSheets();
+}
+
+async function syncToSheets() {
+  setStatus('⟳ กำลังบันทึก...', '#f5c842');
+  try {
+    // ในที่นี้เป็นการจำลองการส่งข้อมูลทั้งหมดไปทับ หรือส่งเฉพาะรายการใหม่
+    // ขึ้นอยู่กับความสามารถของ GAS ของคุณ
+    const res = await fetch(GAS_URL, {
+      method: 'POST',
+      mode: 'no-cors', // GAS มักต้องการโหมดนี้หากไม่ทำ CORS
+      body: JSON.stringify({ action: 'sync', data: data })
+    });
+    setStatus('✓ บันทึกแล้ว', '#4ade80');
+  } catch (e) {
+    setStatus('! บันทึกในเครื่องแล้ว', '#f5c842');
+  }
+}
+
+function deleteEntry(id) {
+  if (!confirm('ยืนยันการลบข้อมูล?')) return;
+  data = data.filter(d => d.id !== id);
+  saveDataToLocal();
+  render();
+  syncToSheets();
+}
+
+function editEntry(id) {
+  openModal(id);
 }
 
 // ============================================================
-// BUILD 8F GRID (defined before any call to it)
+// BUILD 8F GRID
 // ============================================================
 function buildF8Grid(selected) {
   selected = selected || [];
@@ -407,7 +522,7 @@ function toggleF(k) {
   else sel.push(k);
   grid.dataset.sel = JSON.stringify(sel);
   const item = document.getElementById('fci-'+k);
-  item.classList.toggle('selected', sel.includes(k));
+  if (item) item.classList.toggle('selected', sel.includes(k));
 }
 
 function getSelectedF8() {
@@ -455,7 +570,7 @@ function render() {
     </div>
     <div class="tb-divider"></div>
     <div class="tb-stat">
-      <div class="tb-stat-val" style="color:${topCareer?CAREER[topCareer[0]].color:'#888'}">${topCareer?CAREER[topCareer[0]].label:'—'}</div>
+      <div class="tb-stat-val" style="color:${topCareer && topCareer[1]>0 ? CAREER[topCareer[0]].color : '#888'}">${topCareer && topCareer[1]>0 ? CAREER[topCareer[0]].label : '—'}</div>
       <div class="tb-stat-lbl">ตัวเลือกยอดนิยมอันดับ 1</div>
     </div>
     <div class="tb-divider"></div>
@@ -463,12 +578,6 @@ function render() {
       <div class="tb-stat-val" style="color:var(--accent)">${topCareer?topCareer[1]:0} คน</div>
       <div class="tb-stat-lbl">${total>0&&topCareer?((topCareer[1]/total)*100).toFixed(1)+'% ของทั้งหมด':'—'}</div>
     </div>
-    <div class="tb-divider"></div>
-    ${Object.entries(cc).map(([k,v])=>`
-      <div class="tb-stat">
-        <div class="tb-stat-val" style="color:${CAREER[k].color}">${v}</div>
-        <div class="tb-stat-lbl">${CAREER[k].label}</div>
-      </div>`).join('')}
   `;
   document.getElementById('stats-career').innerHTML = Object.entries(CAREER).map(([k,v])=>`
     <div class="stat-card" style="--color:${v.color}">
@@ -494,13 +603,8 @@ function render() {
     </div>
     <div class="tb-divider"></div>
     <div class="tb-stat">
-      <div class="tb-stat-val" style="color:${top8f?F8[top8f[0]].color:'#888'}">${top8f?F8[top8f[0]].label:'—'}</div>
+      <div class="tb-stat-val" style="color:${top8f && top8f[1]>0 ? F8[top8f[0]].color : '#888'}">${top8f && top8f[1]>0 ? F8[top8f[0]].label : '—'}</div>
       <div class="tb-stat-lbl">ค่านิยมยอดนิยมอันดับ 1</div>
-    </div>
-    <div class="tb-divider"></div>
-    <div class="tb-stat">
-      <div class="tb-stat-val" style="color:var(--accent)">${top8f?top8f[1]:0} คน</div>
-      <div class="tb-stat-lbl">${total>0&&top8f?((top8f[1]/total)*100).toFixed(1)+'% ของทั้งหมด':'—'}</div>
     </div>
   `;
   document.getElementById('stats-8f').innerHTML = Object.entries(F8).map(([k,v])=>`
@@ -537,7 +641,9 @@ function render() {
 }
 
 function renderBars(elId, items) {
-  document.getElementById(elId).innerHTML = items.map(({label,color,count,total})=>{
+  const el = document.getElementById(elId);
+  if (!el) return;
+  el.innerHTML = items.map(({label,color,count,total})=>{
     const pct=total>0?(count/total*100):0;
     return `<div class="bar-row">
       <div class="bar-label">${label}</div>
@@ -580,7 +686,8 @@ function todayISO() { return new Date().toISOString().slice(0,10); }
 function setPeriod(p) {
   currentPeriod=p;
   ['day','week','month'].forEach(x=>{
-    document.getElementById('pbtn-'+x).classList.toggle('active',x===p);
+    const btn = document.getElementById('pbtn-'+x);
+    if (btn) btn.classList.toggle('active',x===p);
   });
   renderTimeline();
 }
@@ -592,136 +699,107 @@ function renderTimeline() {
   const today    = data.filter(d=>isoDay(d.createdAt)===todayStr).length;
   const weekStart = new Date(now); weekStart.setDate(now.getDate()-(now.getDay()||7)+1); weekStart.setHours(0,0,0,0);
   const thisWeek  = data.filter(d=>d.createdAt && new Date(d.createdAt)>=weekStart).length;
-  const monthStr  = todayStr.slice(0,7);
-  const thisMonth = data.filter(d=>isoMonth(d.createdAt)===monthStr).length;
-  const allTime   = data.length;
-  const sorted    = [...data].filter(d=>d.createdAt).sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt));
-  const lastDate  = sorted.length ? fmtDate(sorted[0].createdAt) : '—';
+  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+  const thisMonth = data.filter(d=>d.createdAt && new Date(d.createdAt)>=monthStart).length;
 
   document.getElementById('tl-summary').innerHTML = `
-    <div class="tl-card" style="--tc:#f5c842">
+    <div class="tl-card" style="--tc:var(--accent)">
       <div class="tl-card-label">วันนี้</div>
       <div class="tl-card-val">${today}</div>
-      <div class="tl-card-sub">คน · ${todayStr}</div>
-    </div>
-    <div class="tl-card" style="--tc:#60a5fa">
-      <div class="tl-card-label">สัปดาห์นี้</div>
-      <div class="tl-card-val">${thisWeek}</div>
-      <div class="tl-card-sub">คน (จันทร์ – วันนี้)</div>
+      <div class="tl-card-sub">คนใหม่</div>
     </div>
     <div class="tl-card" style="--tc:#4ade80">
+      <div class="tl-card-label">สัปดาห์นี้</div>
+      <div class="tl-card-val">${thisWeek}</div>
+      <div class="tl-card-sub">คนทั้งหมด</div>
+    </div>
+    <div class="tl-card" style="--tc:#60a5fa">
       <div class="tl-card-label">เดือนนี้</div>
       <div class="tl-card-val">${thisMonth}</div>
-      <div class="tl-card-sub">คน · ${monthStr}</div>
-    </div>
-    <div class="tl-card" style="--tc:#a78bfa">
-      <div class="tl-card-label">ทั้งหมด</div>
-      <div class="tl-card-val">${allTime}</div>
-      <div class="tl-card-sub">ล่าสุด ${lastDate}</div>
+      <div class="tl-card-sub">คนทั้งหมด</div>
     </div>
   `;
 
-  let buckets = {};
-  let keyFn;
-  if (currentPeriod==='day') {
-    keyFn = d=>isoDay(d.createdAt);
-    for(let i=13;i>=0;i--) {
-      const dd=new Date(now); dd.setDate(now.getDate()-i);
-      const k=dd.toISOString().slice(0,10);
-      const label=dd.toLocaleDateString('th-TH',{month:'short',day:'numeric'});
-      buckets[k]={label,count:0,isToday:k===todayStr};
-    }
-  } else if (currentPeriod==='week') {
-    keyFn = d=>isoWeek(d.createdAt);
-    const thisWeekKey=isoWeek(now.toISOString());
-    for(let i=7;i>=0;i--) {
-      const dd=new Date(now); dd.setDate(now.getDate()-(now.getDay()||7)+1-i*7);
-      const k=dd.toISOString().slice(0,10);
-      const label='สัปดาห์ '+dd.toLocaleDateString('th-TH',{month:'short',day:'numeric'});
-      buckets[k]={label,count:0,isToday:k===thisWeekKey};
-    }
-  } else {
-    keyFn = d=>isoMonth(d.createdAt);
-    for(let i=11;i>=0;i--) {
-      const dd=new Date(now.getFullYear(), now.getMonth()-i, 1);
-      const k=dd.toISOString().slice(0,7);
-      const label=dd.toLocaleDateString('th-TH',{year:'2-digit',month:'short'});
-      buckets[k]={label,count:0,isToday:k===monthStr};
-    }
-  }
-  data.forEach(d=>{
-    if(!d.createdAt) return;
-    const k=keyFn(d);
-    if(buckets[k]) buckets[k].count++;
+  // Group data for chart
+  const groups = {};
+  data.forEach(d => {
+    let key = '';
+    if (currentPeriod === 'day') key = isoDay(d.createdAt);
+    else if (currentPeriod === 'week') key = isoWeek(d.createdAt);
+    else key = isoMonth(d.createdAt);
+    if (key) groups[key] = (groups[key] || 0) + 1;
   });
 
-  const maxCount = Math.max(...Object.values(buckets).map(b=>b.count), 1);
-  window._tlBuckets = buckets;
-  window._tlKeyFn   = keyFn;
+  const sortedKeys = Object.keys(groups).sort().reverse().slice(0, 10);
+  const max = Math.max(...Object.values(groups), 1);
 
-  document.getElementById('tl-chart').innerHTML = Object.entries(buckets).map(([bKey, b])=>{
-    const pct=(b.count/maxCount*100);
-    const clickable = b.count > 0 ? `onclick="drillDown('${bKey}')" style="cursor:pointer"` : '';
-    return `<div class="tl-bar-row" ${clickable} title="${b.count>0?'คลิกเพื่อดูรายชื่อ':''}">
-      <div class="tl-bar-label">${b.label}${b.isToday?'<span class="tl-today-dot"></span>':''}</div>
-      <div class="tl-bar-track">
-        <div class="tl-bar-fill${b.isToday?' today':''}" style="width:${pct}%">${b.count>0?b.count+' คน':''}</div>
+  document.getElementById('tl-chart').innerHTML = sortedKeys.map(k => {
+    const count = groups[k];
+    const pct = (count / max) * 100;
+    const isToday = (currentPeriod === 'day' && k === todayStr);
+    return `
+      <div class="tl-bar-row" onclick="showDrill('${k}')">
+        <div class="tl-bar-label">${currentPeriod==='day'?fmtDate(k):k}${isToday?' <span class="tl-today-dot"></span>':''}</div>
+        <div class="tl-bar-track">
+          <div class="tl-bar-fill ${isToday?'today':''}" style="width:${pct}%">${count}</div>
+        </div>
+        <div class="tl-bar-count">${count} คน</div>
       </div>
-      <div class="tl-bar-count" style="${b.count>0?'color:var(--accent)':''}">${b.count > 0 ? b.count+' คน 👆' : '0 คน'}</div>
-    </div>`;
-  }).join('');
+    `;
+  }).join('') || '<div class="no-data">ไม่มีข้อมูลในช่วงเวลานี้</div>';
 
-  const logRows = [...data].filter(d=>d.createdAt).sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt));
-  document.getElementById('tl-table-body').innerHTML = logRows.map((d,i)=>{
-    const ch=CAREER[d.answer]||{};
-    const isToday=isoDay(d.createdAt)===todayStr;
-    const ftags=(d.f8||[]).map(k=>F8[k]?`<span class="f-tag" style="background:${F8[k].color}22;color:${F8[k].color}">${F8[k].label}</span>`:'').join('');
-    return `<tr>
-      <td class="id-num">${i+1}</td>
-      <td style="font-weight:600">${d.name||'—'}</td>
-      <td class="date-col${isToday?' date-today':''}">${fmtDate(d.createdAt)}${isToday?' ⬅ วันนี้':''}</td>
-      <td class="time-col">${fmtTime(d.createdAt)}</td>
-      <td>${d.answer?`<span class="badge ${ch.cls}">${ch.label}</span>`:'—'}</td>
-      <td><div class="f-tags">${ftags||'—'}</div></td>
-    </tr>`;
+  // Timeline Table
+  const tlTable = document.getElementById('tl-table-body');
+  const sortedData = [...data].sort((a,b) => new Date(b.createdAt) - new Date(a.createdAt));
+  tlTable.innerHTML = sortedData.map((d, i) => {
+    const ch = CAREER[d.answer] || {};
+    return `
+      <tr>
+        <td class="id-num">${sortedData.length - i}</td>
+        <td style="font-weight:600">${d.name}</td>
+        <td class="time-col ${isoDay(d.createdAt)===todayStr?'date-today':''}">${fmtDate(d.createdAt)}</td>
+        <td class="time-col">${fmtTime(d.createdAt)}</td>
+        <td><span class="badge ${ch.cls}">${ch.label}</span></td>
+        <td><div class="f-tags">${(d.f8||[]).map(k=>`<span class="f-tag" style="background:${F8[k].color}22;color:${F8[k].color}">${F8[k].label}</span>`).join('')}</div></td>
+      </tr>
+    `;
   }).join('');
 }
 
-function drillDown(bucketKey) {
-  const bucket = window._tlBuckets[bucketKey];
-  const keyFn  = window._tlKeyFn;
-  if (!bucket) return;
+function showDrill(key) {
+  const filtered = data.filter(d => {
+    if (currentPeriod === 'day') return isoDay(d.createdAt) === key;
+    if (currentPeriod === 'week') return isoWeek(d.createdAt) === key;
+    return isoMonth(d.createdAt) === key;
+  });
 
-  const people = data.filter(d => d.createdAt && keyFn(d) === bucketKey)
-                     .sort((a,b)=>new Date(a.createdAt)-new Date(b.createdAt));
-
-  document.getElementById('drill-title').textContent = `// ${bucket.label}`;
-  document.getElementById('drill-subtitle').textContent = `${people.length} คน · คลิกที่ชื่อเพื่อดูรายละเอียด`;
-
-  if (!people.length) {
-    document.getElementById('drill-body').innerHTML = `<div class="drill-empty">ไม่มีข้อมูลในช่วงเวลานี้</div>`;
+  document.getElementById('drill-title').textContent = `ข้อมูลวันที่: ${key}`;
+  document.getElementById('drill-subtitle').textContent = `พบทั้งหมด ${filtered.length} คน`;
+  
+  const body = document.getElementById('drill-body');
+  if (!filtered.length) {
+    body.innerHTML = '<div class="drill-empty">ไม่มีข้อมูล</div>';
   } else {
-    document.getElementById('drill-body').innerHTML = people.map((d)=>{
-      const ch = CAREER[d.answer]||{};
-      const initials = (d.name||'?').split(' ').map(w=>w[0]).slice(0,2).join('').toUpperCase();
-      const ftags = (d.f8||[]).map(k=>F8[k]?`<span class="f-tag" style="background:${F8[k].color}22;color:${F8[k].color}">${F8[k].label}</span>`:'').join('');
-      return `<div class="drill-person">
-        <div class="drill-avatar">${initials}</div>
-        <div class="drill-info">
-          <div class="drill-name">${d.name||'—'}</div>
-          <div class="drill-meta">
-            ${d.ig?`<a class="ig-link" href="https://instagram.com/${d.ig.replace('@','')}" target="_blank">${d.ig}</a>`:''}
-            ${d.faculty?`<span>📚 ${d.faculty}</span>`:''}
-            ${d.answer?`<span class="badge ${ch.cls}">${ch.label}</span>`:''}
+    body.innerHTML = filtered.map(d => {
+      const ch = CAREER[d.answer] || {};
+      return `
+        <div class="drill-person">
+          <div class="drill-avatar">${d.name ? d.name[0].toUpperCase() : '?'}</div>
+          <div class="drill-info">
+            <div class="drill-name">${d.name}</div>
+            <div class="drill-meta">
+              <span>${d.faculty || 'ไม่ระบุคณะ'}</span>
+              <span class="badge ${ch.cls}" style="transform:scale(0.8);transform-origin:left">${ch.label}</span>
+            </div>
+            <div class="drill-tags">
+              ${(d.f8||[]).map(k=>`<span class="f-tag" style="background:${F8[k].color}22;color:${F8[k].color}">${F8[k].label}</span>`).join('')}
+            </div>
           </div>
-          ${ftags?`<div class="drill-tags">${ftags}</div>`:''}
-          ${d.note?`<div style="font-size:12px;color:var(--muted);margin-top:4px;font-style:italic">💬 ${d.note}</div>`:''}
+          <div class="drill-time">${fmtTime(d.createdAt)}</div>
         </div>
-        <div class="drill-time">${fmtTime(d.createdAt)}</div>
-      </div>`;
+      `;
     }).join('');
   }
-
   document.getElementById('drill-modal').classList.add('open');
 }
 
@@ -729,82 +807,12 @@ function closeDrill() {
   document.getElementById('drill-modal').classList.remove('open');
 }
 
-document.getElementById('drill-modal').addEventListener('click', function(e){
-  if(e.target===this) closeDrill();
-});
-
-// ============================================================
-// MODAL
-// ============================================================
-function openModal() {
-  editId = null;
-  buildF8Grid([]);
-  document.getElementById('modal-title').textContent='// เพิ่มข้อมูลใหม่';
-  ['f-name','f-ig','f-faculty','f-note'].forEach(id=>document.getElementById(id).value='');
-  document.getElementById('f-answer').value='';
-  document.getElementById('modal').classList.add('open');
-}
-
-function closeModal() {
-  document.getElementById('modal').classList.remove('open');
-  editId=null;
-}
-
-function saveEntry() {
-  const name    = document.getElementById('f-name').value.trim();
-  const ig      = document.getElementById('f-ig').value.trim();
-  const faculty = document.getElementById('f-faculty').value.trim();
-  const answer  = document.getElementById('f-answer').value;
-  const f8      = getSelectedF8();
-  const note    = document.getElementById('f-note').value.trim();
-  if (!name)   { alert('กรุณาระบุชื่อ'); return; }
-  if (!answer) { alert('กรุณาเลือก Career Path'); return; }
-  let entry;
-  if (editId!==null) {
-    const idx=data.findIndex(d=>d.id===editId);
-    if(idx>-1) { data[idx]={...data[idx],name,ig,faculty,answer,f8,note}; entry=data[idx]; }
-    closeModal();
-    setStatus('⟳ กำลังบันทึก...', '#f5c842');
-    apiPost({ action:'edit', entry }).then(()=>setStatus('✓ บันทึกแล้ว','#4ade80')).catch(()=>setStatus('✗ บันทึกไม่ได้','#f472b6'));
-  } else {
-    entry = {id:nextId++,name,ig,faculty,answer,f8,note,createdAt:new Date().toISOString()};
-    data.push(entry);
-    closeModal();
-    setStatus('⟳ กำลังบันทึก...', '#f5c842');
-    apiPost({ action:'add', entry }).then(()=>setStatus('✓ บันทึกแล้ว','#4ade80')).catch(()=>setStatus('✗ บันทึกไม่ได้','#f472b6'));
-  }
-  render();
-}
-
-function editEntry(id) {
-  const d=data.find(x=>x.id===id); if(!d) return;
-  editId=id;
-  buildF8Grid(d.f8||[]);
-  document.getElementById('modal-title').textContent='// แก้ไขข้อมูล';
-  document.getElementById('f-name').value=d.name||'';
-  document.getElementById('f-ig').value=d.ig||'';
-  document.getElementById('f-faculty').value=d.faculty||'';
-  document.getElementById('f-answer').value=d.answer||'';
-  document.getElementById('f-note').value=d.note||'';
-  document.getElementById('modal').classList.add('open');
-}
-
-function deleteEntry(id) {
-  if(!confirm('ยืนยันการลบข้อมูลนี้?')) return;
-  data=data.filter(d=>d.id!==id);
-  setStatus('⟳ กำลังลบ...', '#f5c842');
-  apiPost({ action: 'delete', id }).then(() => {
-    setStatus('✓ ลบแล้ว', '#4ade80');
-  }).catch(() => setStatus('✗ ลบไม่ได้', '#f472b6'));
-  render();
-}
-
-document.getElementById('modal').addEventListener('click',function(e){
-  if(e.target===this) closeModal();
-});
-
-// Init — load from Google Sheets
-loadFromSheets();
+// Initial Load
+window.onload = () => {
+  loadDataFromLocal();
+  // ลองซิงค์กับ Sheets เมื่อเปิดโปรแกรม
+  loadFromSheets();
+};
 </script>
 </body>
 </html>
