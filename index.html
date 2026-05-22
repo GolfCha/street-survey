@@ -252,7 +252,10 @@
     <div class="table-section">
       <div class="table-header-row">
         <div class="section-title" style="margin:0">// ข้อมูลผู้ตอบแบบสำรวจ</div>
-        <button class="btn-add" onclick="openModal()">+ เพิ่มข้อมูล</button>
+        <div>
+          <button class="btn-add" onclick="openModal()">+ เพิ่มข้อมูล</button>
+          <button class="btn-add" style="background:var(--muted); color:white; margin-left:10px;" onclick="exportToCSV()">Export CSV</button>
+        </div>
       </div>
       <div style="overflow-x:auto">
         <table>
@@ -271,7 +274,6 @@
 
 </div>
 
-<!-- ADD/EDIT MODAL -->
 <div class="modal-overlay" id="modal">
   <div class="modal">
     <div class="modal-title" id="modal-title">// เพิ่มข้อมูลใหม่</div>
@@ -315,7 +317,6 @@
   </div>
 </div>
 
-<!-- DRILL-DOWN MODAL -->
 <div class="drill-overlay" id="drill-modal">
   <div class="drill-modal">
     <div class="drill-header">
@@ -604,7 +605,7 @@ function render() {
     <div class="tb-divider"></div>
     <div class="tb-stat">
       <div class="tb-stat-val" style="color:var(--accent)">${topCareer?topCareer[1]:0} คน</div>
-      <div class="tb-stat-lbl">${total>0&&topCareer?((topCareer[1]/total)*100).toFixed(1)+'% ของทั้งหมด':'—'}</div>
+      <div class="tb-stat-lbl">| ${total>0&&topCareer?((topCareer[1]/total)*100).toFixed(1)+'% ของทั้งหมด':'—'}</div>
     </div>
   `;
   document.getElementById('stats-career').innerHTML = Object.entries(CAREER).map(([k,v])=>`
@@ -833,6 +834,48 @@ function showDrill(key) {
 
 function closeDrill() {
   document.getElementById('drill-modal').classList.remove('open');
+}
+
+// ============================================================
+// EXPORT TO CSV FEATURE
+// ============================================================
+function exportToCSV() {
+  if (data.length === 0) {
+    alert('ไม่มีข้อมูลให้ Export');
+    return;
+  }
+
+  // สร้างหัวตาราง (ใส่ \uFEFF เพื่อให้ Excel อ่านภาษาไทยได้ถูกต้อง)
+  let csvContent = "data:text/csv;charset=utf-8,\uFEFF";
+  csvContent += "ลำดับ,ชื่อ,Instagram,คณะ/สาขา,Career Path,8F Values,โน้ต,วันที่สร้าง\n";
+
+  // เพิ่มข้อมูลแต่ละแถว
+  data.forEach((d, i) => {
+    const careerLabel = CAREER[d.answer] ? CAREER[d.answer].label : '';
+    const f8Labels = (d.f8 || []).map(k => F8[k] ? F8[k].label : '').join('; ');
+    
+    // ป้องกันปัญหาเว้นวรรค/คอมม่าเพี้ยน ด้วยการใส่เครื่องหมายอัญประกาศครอบไว้
+    const row = [
+      i + 1,
+      `"${d.name || ''}"`,
+      `"${d.ig || ''}"`,
+      `"${d.faculty || ''}"`,
+      `"${careerLabel}"`,
+      `"${f8Labels}"`,
+      `"${d.note || ''}"`,
+      `"${d.createdAt || ''}"`
+    ].join(",");
+    csvContent += row + "\n";
+  });
+
+  // สร้างลิงก์ดาวน์โหลดไฟล์อัตโนมัติ
+  const encodedUri = encodeURI(csvContent);
+  const link = document.createElement("a");
+  link.setAttribute("href", encodedUri);
+  link.setAttribute("download", "Survey_Data_" + new Date().toISOString().slice(0, 10) + ".csv");
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
 }
 
 // ============================================================
