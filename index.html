@@ -271,6 +271,7 @@
 
 </div>
 
+<!-- ADD/EDIT MODAL -->
 <div class="modal-overlay" id="modal">
   <div class="modal">
     <div class="modal-title" id="modal-title">// เพิ่มข้อมูลใหม่</div>
@@ -314,6 +315,7 @@
   </div>
 </div>
 
+<!-- DRILL-DOWN MODAL -->
 <div class="drill-overlay" id="drill-modal">
   <div class="drill-modal">
     <div class="drill-header">
@@ -347,12 +349,19 @@ const F8 = {
 };
 
 // ============================================================
-// SETTINGS: JSONBin.io 
+// JSONBIN.IO CONFIG — ใส่ค่าของคุณตรงนี้
 // ============================================================
-const BIN_ID = 'YOUR_BIN_ID_HERE'; // <-- นำ BIN ID มาใส่ในเครื่องหมายคำพูด
-const MASTER_KEY = '$2a$10$0nWExuxTkHWPbHMNLByV2eIiBAoDhNB5eBLxH1X8Tn/0gKjowhHAK';
-const JSONBIN_URL = `https://api.jsonbin.io/v3/b/${BIN_ID}`;
+const JSONBIN_BIN_ID  = '6a10448c6610dd3ae8892e81';
+const JSONBIN_API_KEY = '$2a$10$0nWExuxTkHWPbHMNLByV2eIiBAoDhNB5eBLxH1X8Tn/0gKjowhHAK';
+// ============================================================
+
 const STORAGE_KEY = 'STREET_SURVEY_DATA';
+const JSONBIN_URL  = `https://api.jsonbin.io/v3/b/${JSONBIN_BIN_ID}`;
+const HEADERS_JSON = {
+  'Content-Type': 'application/json',
+  'X-Master-Key': JSONBIN_API_KEY,
+  'X-Bin-Versioning': 'false'  // เขียนทับแทนการสร้าง version ใหม่
+};
 
 let data = [];
 let nextId = 1;
@@ -360,7 +369,14 @@ let editId = null;
 let currentPeriod = 'day';
 
 // ============================================================
-// PERSISTENCE LOGIC (LocalStorage)
+// CLOUD CONFIGURED CHECK
+// ============================================================
+function isConfigured() {
+  return JSONBIN_BIN_ID !== 'YOUR_BIN_ID' && JSONBIN_API_KEY !== 'YOUR_API_KEY';
+}
+
+// ============================================================
+// PERSISTENCE — LocalStorage (cache)
 // ============================================================
 function saveDataToLocal() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
@@ -373,7 +389,7 @@ function loadDataFromLocal() {
       data = JSON.parse(saved);
       nextId = data.length ? Math.max(...data.map(d => d.id)) + 1 : 1;
       render();
-      setStatus('✓ โหลดข้อมูลจากเครื่องแล้ว', '#4ade80');
+      setStatus('✓ โหลดแคชในเครื่อง', '#4ade80');
     } catch (e) {
       console.error('Error loading local data', e);
     }
@@ -385,28 +401,31 @@ function setStatus(msg, color) {
   if (el) { el.textContent = msg; el.style.color = color || 'var(--muted)'; }
 }
 
+// ============================================================
+// CLOUD READ
+// ============================================================
 async function loadFromSheets() {
-  setStatus('⟳ กำลังซิงค์...', '#f5c842');
+  if (!isConfigured()) {
+    showSetupBanner();
+    setStatus('⚠ ยังไม่ได้ตั้งค่า Cloud', '#f5c842');
+    return;
+  }
+  setStatus('⟳ กำลังโหลดจาก Cloud...', '#f5c842');
   try {
-    const res = await fetch(JSONBIN_URL, {
-      method: 'GET',
-      headers: {
-        'X-Master-Key': MASTER_KEY
-      }
+    const res = await fetch(JSONBIN_URL + '/latest', {
+      headers: { 'X-Master-Key': JSONBIN_API_KEY }
     });
-    
-    if (res.ok) {
-      const json = await res.json();
-      data = json.record || []; 
-      nextId = data.length ? Math.max(...data.map(d => d.id)) + 1 : 1;
-      saveDataToLocal();
-      setStatus('✓ ซิงค์สำเร็จ', '#4ade80');
-      render();
-    } else {
-      setStatus('✗ ซิงค์ไม่สำเร็จ', '#f472b6');
-    }
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const json = await res.json();
+    const cloudData = Array.isArray(json.record) ? json.record : [];
+    data = cloudData.map(d => ({ ...d, id: Number(d.id) }));
+    nextId = data.length ? Math.max(...data.map(d => d.id)) + 1 : 1;
+    saveDataToLocal();
+    setStatus('✓ ซิงค์สำเร็จ', '#4ade80');
+    render();
   } catch(e) {
-    setStatus('✗ เชื่อมต่อไม่ได้ (ใช้ข้อมูลในเครื่อง)', '#f472b6');
+    console.error('Cloud load error:', e);
+    setStatus('✗ โหลดจาก Cloud ไม่ได้ (ใช้แคช)', '#f472b6');
   }
 }
 
@@ -472,31 +491,26 @@ function saveEntry() {
   saveDataToLocal();
   render();
   closeModal();
-  
-  // พยายามส่งข้อมูลไป JSONBin
-  syncToSheets();
+  syncToCloud();
 }
 
-async function syncToSheets() {
+async function syncToCloud() {
+  if (!isConfigured()) {
+    setStatus('⚠ ยังไม่ได้ตั้งค่า Cloud', '#f5c842');
+    return;
+  }
   setStatus('⟳ กำลังบันทึก...', '#f5c842');
   try {
     const res = await fetch(JSONBIN_URL, {
       method: 'PUT',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Master-Key': MASTER_KEY
-      },
+      headers: HEADERS_JSON,
       body: JSON.stringify(data)
     });
-    
-    if (res.ok) {
-      setStatus('✓ บันทึกขึ้น Cloud แล้ว', '#4ade80');
-    } else {
-      setStatus('! ซิงค์พลาด', '#f472b6');
-    }
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    setStatus('✓ บันทึก Cloud แล้ว', '#4ade80');
   } catch (e) {
-    console.error(e);
-    setStatus('! บันทึกในเครื่อง (รอซิงค์)', '#f5c842');
+    console.error('Cloud save error:', e);
+    setStatus('! บันทึกในเครื่องแล้ว (Cloud ล้มเหลว)', '#f5c842');
   }
 }
 
@@ -505,7 +519,7 @@ function deleteEntry(id) {
   data = data.filter(d => d.id !== id);
   saveDataToLocal();
   render();
-  syncToSheets();
+  syncToCloud();
 }
 
 function editEntry(id) {
@@ -821,10 +835,34 @@ function closeDrill() {
   document.getElementById('drill-modal').classList.remove('open');
 }
 
+// ============================================================
+// SETUP BANNER
+// ============================================================
+function showSetupBanner() {
+  if (document.getElementById('setup-banner')) return;
+  const banner = document.createElement('div');
+  banner.id = 'setup-banner';
+  banner.style.cssText = 'position:fixed;bottom:0;left:0;right:0;background:#1a1200;border-top:2px solid #f5c842;padding:18px 32px;z-index:500;display:flex;align-items:center;gap:20px;flex-wrap:wrap;';
+  banner.innerHTML = `
+    <div style="flex:1;min-width:260px">
+      <div style="font-family:Space Mono,monospace;font-size:12px;color:#f5c842;letter-spacing:1px;margin-bottom:6px">⚠ ยังไม่ได้เชื่อมต่อ Cloud Storage</div>
+      <div style="font-size:13px;color:#aaa;line-height:1.7">
+        ข้อมูลจะหายเมื่อเปิดคนละเครื่อง — ทำตามขั้นตอนเพื่อเชื่อมต่อ JSONBin.io (ฟรี ไม่ต้อง login):<br>
+        <b style="color:#f0f0f0">1.</b> ไปที่ <a href="https://jsonbin.io" target="_blank" style="color:#f5c842">jsonbin.io</a> → Sign Up ฟรี → กด <b>Create Bin</b> → ใส่ <code style="background:#111;padding:1px 5px;border-radius:3px">[]</code> เป็น content → กด Create → คัดลอก <b style="color:#4ade80">BIN ID</b> จาก URL<br>
+        <b style="color:#f0f0f0">2.</b> ไปที่ <b>API Keys</b> (เมนูซ้าย) → คัดลอก <b style="color:#4ade80">Master Key</b><br>
+        <b style="color:#f0f0f0">3.</b> เปิด <code style="background:#111;padding:1px 5px;border-radius:3px">index.html</code> แก้ไข 2 บรรทัดนี้ในส่วน &lt;script&gt;:<br>
+        <code style="background:#111;padding:6px 10px;border-radius:4px;display:inline-block;margin-top:6px;font-size:12px;color:#4ade80;line-height:1.8">const JSONBIN_BIN_ID  = 'ใส่ BIN ID ตรงนี้';<br>const JSONBIN_API_KEY = 'ใส่ Master Key ตรงนี้';</code><br>
+        <b style="color:#f0f0f0">4.</b> Push ขึ้น GitHub ใหม่ → ข้อมูลจะซิงค์ทุกเครื่อง ✓
+      </div>
+    </div>
+    <button onclick="document.getElementById('setup-banner').remove()" style="background:none;border:1px solid #333;color:#666;border-radius:6px;padding:6px 14px;cursor:pointer;font-family:Space Mono,monospace;font-size:11px;flex-shrink:0;margin-top:4px">ปิด ✕</button>
+  `;
+  document.body.appendChild(banner);
+}
+
 // Initial Load
 window.onload = () => {
   loadDataFromLocal();
-  // ลองซิงค์กับ JSONBin เมื่อเปิดโปรแกรม
   loadFromSheets();
 };
 </script>
